@@ -1,143 +1,236 @@
 // ==UserScript==
-// @name         Dynamics Inline 标签优化检测
+// @name         Dynamics Inline 标签优化（稳定增强版 v6）
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  检测 content 字段中可合并的 inline 标签，提示用户是否修复
+// @version      1.0
+// @description  检测并选择性合并 content 字段中被拆分的 inline 标签（显示原始切片）
 // @author       zrq
 // @match        https://*.dynamics.com/main.aspx*
 // @grant        none
 // @run-at       document-idle
+// @license      MIT
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    console.log("Inline 优化脚本已加载");
-
+    /************** 等待 Xrm（最多 10 秒） **************/
     function waitForXrm(callback) {
-        var check = setInterval(function () {
+        let retry = 0;
+        const timer = setInterval(() => {
+            retry++;
+            console.log("等待 Xrm 第 " + retry + " 次");
+
             if (window.Xrm && Xrm.Page && Xrm.Page.getAttribute) {
-                clearInterval(check);
+                clearInterval(timer);
                 callback();
             }
-        }, 2000);
+
+            if (retry > 20) {
+                clearInterval(timer);
+                console.error("等待 Xrm 超时");
+            }
+
+        }, 10000); // 10 秒
     }
 
-    waitForXrm(function () {
+    waitForXrm(init);
 
-        var attr = Xrm.Page.getAttribute("content");
-        if (!attr) {
-            console.warn("找不到字段 content");
-            return;
-        }
+    /************** 主逻辑 **************/
+    function init() {
 
-        var html = attr.getValue();
+        const attr = Xrm.Page.getAttribute("content");
+        if (!attr) return;
+
+        const html = attr.getValue();
         if (!html) return;
 
-        var tempDiv = document.createElement("div");
+        const tempDiv = document.createElement("div");
         tempDiv.innerHTML = html;
 
-        function isIgnorableNode(node) {
-            return node.nodeType === 3 && !node.textContent.trim();
+        const inlineTags = ["STRONG","B","EM","SPAN","U","MARK","SMALL","SUB","SUP"];
+
+        function isInline(node) {
+            return node &&
+                node.nodeType === 1 &&
+                inlineTags.includes(node.nodeName);
         }
 
-        function isInlineElement(node) {
-            if (!node || node.nodeType !== 1) return false;
+        function isIgnorable(node) {
+            if (!node) return false;
 
-            const inlineTags = [
-                "STRONG", "B", "EM",
-                "SPAN", "U", "MARK", "SMALL",
-                "SUB", "SUP"
-            ];
+            if (node.nodeType === 3 && !node.textContent.trim()) return true;
+            if (isInline(node) && !node.textContent.trim()) return true;
 
-            return inlineTags.includes(node.nodeName);
+            return false;
         }
 
-        function attributesEqual(a, b) {
+        function attrsEqual(a, b) {
             if (a.attributes.length !== b.attributes.length) return false;
 
             for (let i = 0; i < a.attributes.length; i++) {
-                let attrA = a.attributes[i];
-                let attrB = b.getAttribute(attrA.name);
-                if (attrB !== attrA.value) return false;
+                const attr = a.attributes[i];
+                if (b.getAttribute(attr.name) !== attr.value) return false;
             }
-
             return true;
         }
 
         function canMerge(a, b) {
-            if (!a || !b) return false;
-            if (a.nodeName !== b.nodeName) return false;
-            if (!isInlineElement(a)) return false;
-            return attributesEqual(a, b);
+            return a &&
+                   b &&
+                   a.nodeName === b.nodeName &&
+                   isInline(a) &&
+                   attrsEqual(a, b);
         }
 
-        function processNode(node) {
+        let mergeGroups = [];
+
+        function scan(node) {
 
             let child = node.firstChild;
-            let changed = false;
 
             while (child) {
 
-                // 删除空 inline 标签
-                if (isInlineElement(child) && !child.textContent.trim()) {
-                    let toRemove = child;
-                    child = child.nextSibling;
-                    node.removeChild(toRemove);
-                    changed = true;
-                    continue;
-                }
+                if (isInline(child)) {
 
-                if (isInlineElement(child)) {
-
+                    let group = [child];
                     let next = child.nextSibling;
 
-                    // 删除空白文本节点
-                    while (next && isIgnorableNode(next)) {
-                        let toRemove = next;
+                    while (next && isIgnorable(next)) {
                         next = next.nextSibling;
-                        node.removeChild(toRemove);
-                        changed = true;
                     }
 
-                    if (canMerge(child, next)) {
-                        child.innerHTML += next.innerHTML;
-                        node.removeChild(next);
-                        changed = true;
-                        continue;
+                    while (canMerge(child, next)) {
+
+                        group.push(next);
+                        next = next.nextSibling;
+
+                        while (next && isIgnorable(next)) {
+                            next = next.nextSibling;
+                        }
+                    }
+
+                    if (group.length > 1) {
+                        mergeGroups.push(group);
                     }
                 }
 
                 if (child.nodeType === 1) {
-                    if (processNode(child)) {
-                        changed = true;
-                    }
+                    scan(child);
                 }
 
                 child = child.nextSibling;
             }
-
-            return changed;
         }
 
-        var changed = processNode(tempDiv);
+        scan(tempDiv);
 
-        if (!changed) {
-            console.log("未发现可优化的 inline 标签");
+        if (mergeGroups.length === 0) {
+            console.log("未发现可合并结构");
             return;
         }
 
-        console.log("发现可优化结构");
+        createPanel(mergeGroups, tempDiv, attr);
+    }
 
-        if (!confirm("检测到可优化的 inline 标签结构，是否自动合并？")) {
-            return;
-        }
+    /************** UI 面板 **************/
+    function createPanel(groups, tempDiv, attr) {
 
-        var newHtml = tempDiv.innerHTML;
+        const panel = document.createElement("div");
 
-        attr.setValue(newHtml);
+        Object.assign(panel.style, {
+            position: "fixed",
+            top: "60px",
+            right: "20px",
+            width: "420px",
+            maxHeight: "500px",
+            overflow: "auto",
+            background: "#fff",
+            border: "1px solid #ccc",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+            zIndex: "999999",
+            padding: "12px",
+            fontSize: "12px",
+            borderRadius: "6px"
+        });
 
-        alert("已完成 inline 合并，请手动保存记录");
-    });
+        panel.innerHTML = "<b>检测到可合并片段：</b><br><br>";
+
+        groups.forEach((group, index) => {
+
+            const id = "merge_group_" + index;
+
+            const wrapper = document.createElement("div");
+            wrapper.style.marginBottom = "12px";
+
+            const title = document.createElement("div");
+            title.innerHTML = `
+                <label>
+                    <input type="checkbox" id="${id}" checked>
+                    &lt;${group[0].nodeName}&gt; （共 ${group.length} 片）
+                </label>
+            `;
+            wrapper.appendChild(title);
+
+            const preview = document.createElement("div");
+            preview.style.marginTop = "6px";
+
+            group.forEach((node, i) => {
+                const span = document.createElement("span");
+                span.textContent = node.textContent;
+                span.style.display = "inline-block";
+                span.style.padding = "2px 4px";
+                span.style.margin = "2px";
+                span.style.background = "#f5f5f5";
+                span.style.border = "1px solid #ddd";
+                span.style.borderRadius = "3px";
+                span.title = node.outerHTML;
+                preview.appendChild(span);
+            });
+
+            wrapper.appendChild(preview);
+            panel.appendChild(wrapper);
+        });
+
+        const mergeBtn = document.createElement("button");
+        mergeBtn.textContent = "执行合并";
+        mergeBtn.style.marginRight = "10px";
+
+        mergeBtn.onclick = function () {
+
+            groups.forEach((group, index) => {
+
+                const checkbox = document.getElementById("merge_group_" + index);
+                if (!checkbox || !checkbox.checked) return;
+
+                const first = group[0];
+
+                for (let i = 1; i < group.length; i++) {
+                    const current = group[i];
+                    if (current.parentNode) {
+                        while (current.firstChild) {
+                            first.appendChild(current.firstChild);
+                        }
+                        current.parentNode.removeChild(current);
+                    }
+                }
+            });
+
+            attr.setValue(tempDiv.innerHTML);
+            document.body.removeChild(panel);
+            alert("合并完成，请手动保存记录");
+        };
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "取消";
+
+        cancelBtn.onclick = function () {
+            document.body.removeChild(panel);
+        };
+
+        panel.appendChild(mergeBtn);
+        panel.appendChild(cancelBtn);
+
+        document.body.appendChild(panel);
+    }
 
 })();
