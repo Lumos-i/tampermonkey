@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dynamics Inline 标签优化检测
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      3.0
 // @description  检测 content 字段中可合并的 inline 标签，提示用户是否修复
 // @author       zrq
 // @match        https://*.dynamics.com/main.aspx*
