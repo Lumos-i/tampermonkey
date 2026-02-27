@@ -30,7 +30,7 @@
                 console.error("等待 Xrm 超时");
             }
 
-        }, 10000); // 10 秒
+        }, 5000); // 10 秒
     }
 
     waitForXrm(init);
