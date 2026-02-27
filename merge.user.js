@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Dynamics Inline 标签优化（稳定增强版 v6）
+// @name         Dynamics Inline 标签优化
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  检测并选择性合并 content 字段中被拆分的 inline 标签（显示原始切片）
+// @version      2.2
+// @description  检测并选择性合并 content 字段中被拆分的 inline 标签（支持保存触发）
 // @author       zrq
 // @match        https://*.dynamics.com/main.aspx*
 // @grant        none
@@ -30,10 +30,28 @@
                 console.error("等待 Xrm 超时");
             }
 
-        }, 5000); // 10 秒
+        }, 5000);
     }
 
-    waitForXrm(init);
+    waitForXrm(function () {
+        init();
+        registerOnSave();   // ⭐ 新增：注册保存监听
+    });
+
+    /************** 保存监听 **************/
+    function registerOnSave() {
+
+        if (!Xrm.Page || !Xrm.Page.data || !Xrm.Page.data.entity) return;
+
+        Xrm.Page.data.entity.addOnSave(function () {
+            console.log("检测到保存事件，重新执行 inline 扫描");
+
+            // 等待 Dynamics 内部刷新完成
+            setTimeout(function () {
+                init();
+            }, 10000);
+        });
+    }
 
     /************** 主逻辑 **************/
     function init() {
@@ -57,16 +75,13 @@
 
         function isIgnorable(node) {
             if (!node) return false;
-
             if (node.nodeType === 3 && !node.textContent.trim()) return true;
             if (isInline(node) && !node.textContent.trim()) return true;
-
             return false;
         }
 
         function attrsEqual(a, b) {
             if (a.attributes.length !== b.attributes.length) return false;
-
             for (let i = 0; i < a.attributes.length; i++) {
                 const attr = a.attributes[i];
                 if (b.getAttribute(attr.name) !== attr.value) return false;
@@ -135,7 +150,12 @@
     /************** UI 面板 **************/
     function createPanel(groups, tempDiv, attr) {
 
+        // 避免重复创建面板
+        const old = document.getElementById("inline_merge_panel");
+        if (old) old.remove();
+
         const panel = document.createElement("div");
+        panel.id = "inline_merge_panel";
 
         Object.assign(panel.style, {
             position: "fixed",
@@ -174,7 +194,7 @@
             const preview = document.createElement("div");
             preview.style.marginTop = "6px";
 
-            group.forEach((node, i) => {
+            group.forEach((node) => {
                 const span = document.createElement("span");
                 span.textContent = node.textContent;
                 span.style.display = "inline-block";
