@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dynamics Inline 标签优化（稳定增强版 v6）
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      2.0
 // @description  检测并选择性合并 content 字段中被拆分的 inline 标签（显示原始切片）
 // @author       zrq
 // @match        https://*.dynamics.com/main.aspx*
